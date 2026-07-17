@@ -6,6 +6,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <inttypes.h>
+ 
 
 typedef struct FileMapping
 {
@@ -29,6 +31,9 @@ typedef enum {
     GGUF_TYPE_INT64   = 11,
     GGUF_TYPE_FLOAT64 = 12,
 } GGUFType;
+
+FileMapping mf = {NULL,-1,-1};
+uint32_t general_alignment = 32;
 
 typedef struct {
     char *str;
@@ -130,12 +135,12 @@ void print_gguf_value(const uint8_t *data, uint64_t *offset, uint32_t type) {
             // For safety and brevity in the dump, we print the first few items if it's strings/numbers
             if (array_len > 0) {
                 if (item_type == GGUF_TYPE_STRING) {
-                    // Print just the first element as an example if it's a massive array (like tokens)
+                    // Printing just the first element as an example if it's a massive array (like tokens)
                     GGUFString first_item = read_gguf_string(data, offset);
                     printf("[\"%s\", ...]\n", first_item.str);
                     free(first_item.str);
                     
-                    // Skip the remaining strings in the array to advance the offset correctly
+                    // Skiping the remaining strings in the array to advance the offset correctly
                     for (uint64_t i = 1; i < array_len; i++) {
                         uint64_t skip_len = *(uint64_t *)(data + *offset);
                         *offset += 8 + skip_len;
@@ -158,8 +163,42 @@ void print_gguf_value(const uint8_t *data, uint64_t *offset, uint32_t type) {
     }
 }
 
+void tensor_table_of_contents(const char * filePath , uint64_t tensor_count, uint64_t tensor_offset)
+{
+
+    for (uint64_t i = 0; i < tensor_count; i++)
+    {
+        GGUFString  t_name = read_gguf_string(mf.data,&tensor_offset);
+
+        uint32_t n_dims = *(uint32_t *)(mf.data +tensor_offset);
+        tensor_offset += 4;
+
+        uint64_t * dims   = malloc(n_dims * sizeof(uint64_t));
+        for (uint32_t i = 0; i < n_dims; i++)
+        {
+           dims[i] = *(uint64_t*)(mf.data +tensor_offset); 
+           tensor_offset += 8;
+        }
+
+        uint32_t t_type = *(uint32_t*)(mf.data +tensor_offset);
+        tensor_offset+=4;
+
+        uint64_t relative_data_offset = *(uint64_t *)(mf.data + tensor_offset);
+        tensor_offset += 8; 
+
+        printf("Tensor %lu: Name: %s, Type: %u, Dims: %u\n", i, t_name.str, t_type, n_dims);
+    
+        free(t_name.str);
+        free(dims);
+        
+    }
+
+    printf("Here ends the tensor_table_of_contents at offset : %zu \n", tensor_offset);
+    
+}
+
 void display_gloabal_dump(const char *filePath) {
-    FileMapping mf = map_file(filePath);
+    mf = map_file(filePath);
     printf("SuccessFull File mapping %zu\n", mf.size);
 
     if (mf.size < 24) {
@@ -184,6 +223,10 @@ void display_gloabal_dump(const char *filePath) {
         uint32_t value_type = *(uint32_t *)(mf.data + offset);
         offset += 4;
 
+        if (strcmp(key.str, "general.alignment") == 0) {
+        // Since it's a UINT32, read it directly
+        general_alignment = *(uint32_t *)(mf.data + offset);
+         }
         printf("%s = ", key.str);
         print_gguf_value(mf.data, &offset, value_type);
 
@@ -192,8 +235,16 @@ void display_gloabal_dump(const char *filePath) {
 
     // now Moiz knows from where to pick up..... 
     printf("\n[Metadata Section Ends at Byte Offset: %lu]\n", offset);
+    uint64_t tensor_offset = offset;
+
+     printf("\nGeneral_Alignment : %"PRIu32"\n", general_alignment);
+
+   
+    tensor_table_of_contents(filePath,tensor_count,tensor_offset);
+
 
     unmap_file(&mf);
+
 }
 
 void specific_tensor_data(const char * filePath,const char * tensorName )
@@ -222,5 +273,6 @@ int main(int argc , char **argv)
 
     return 0;
 }
+
 
 
