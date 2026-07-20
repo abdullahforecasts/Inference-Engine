@@ -63,6 +63,11 @@ typedef struct {
     uint64_t relative_offset;
 } TargetTensorInfo;
 
+typedef struct {
+    uint16_t d;    //delta
+    int8_t  qs[32];  // 32 bytes: 32 quantized 8-bit integers
+} block_q8_0;
+
 
 const char* get_ggml_type_name(ggml_type type) {
     switch (type) {
@@ -322,6 +327,40 @@ uint64_t display_gloabal_dump(const FileMapping *mf, int ShouldPrint, const char
     return tensor_table_of_contents(mf, tensor_count, tensor_offset, ShouldPrint, targetName, targetInfo);
 }
 
+float fp16_to_fp32(uint16_t h)
+{
+
+    return 0.0;
+}
+
+void print_q8_0_weights(const uint8_t *tensor_bytes_ptr, int count, int dequantize) {
+
+    block_q8_0 *blocks = (block_q8_0 *)tensor_bytes_ptr;
+    
+    for (int i = 0; i < count; i++) {
+        int block_idx = i / 32;
+        int local_idx = i % 32;
+        
+        block_q8_0 block = blocks[block_idx];
+        int8_t raw_val = block.qs[local_idx];
+        
+        if (dequantize) {
+            float scale = fp16_to_fp32(block.d);
+            float dequantized_val = raw_val * scale;
+            printf("Weight[%d] (Dequantized) = %f\n", i, dequantized_val);
+        } else {
+            printf("Weight[%d] (Raw Q8) = %d\n", i, raw_val);
+        }
+    }
+}
+
+void print_f32_weights(const uint8_t *tensor_bytes_ptr, int count) {
+    float *weights = (float *)tensor_bytes_ptr;
+    for (int i = 0; i < count; i++) {
+        printf("Weight[%d] = %f\n", i, weights[i]);
+    }
+}
+
 void specific_tensor_data(const FileMapping *mf, const char * tensorName)
 {
     TargetTensorInfo info;
@@ -339,19 +378,23 @@ void specific_tensor_data(const FileMapping *mf, const char * tensorName)
     uint64_t absolute_coordinate = raw_data_start + info.relative_offset;
     uint8_t *tensor_bytes_ptr = mf->data + absolute_coordinate;
 
-   printf("\n--- Target Tensor Found ---\n");
-printf("Name:                           %s\n", tensorName);
-printf("Type ID:                        %u (%s)\n", info.type, get_ggml_type_name(info.type));
+    printf("\n--- Target Tensor Found ---\n");
+    printf("Name:                           %s\n", tensorName);
+    printf("Type ID:                        %u (%s)\n", info.type, get_ggml_type_name(info.type));
     printf("Dimensions:                     %u [", info.n_dims);
+
     for(uint32_t d = 0; d < info.n_dims; d++) {
         printf("%lu%s", info.dims[d], (d == info.n_dims - 1) ? "" : " x ");
     }
+
     printf("]\n");
     printf("Binary Pool Begins at Offset:   %lu\n", raw_data_start);
     printf("Relative Tensor Offset:         %lu\n", info.relative_offset);
     printf("Absolute File Byte Position:    %lu\n", absolute_coordinate);
     printf("Direct Memory Pointer Address:  %p\n", (void*)tensor_bytes_ptr);
 }
+
+
 
 int main(int argc, char **argv)
 {
