@@ -327,10 +327,45 @@ uint64_t display_gloabal_dump(const FileMapping *mf, int ShouldPrint, const char
     return tensor_table_of_contents(mf, tensor_count, tensor_offset, ShouldPrint, targetName, targetInfo);
 }
 
-float fp16_to_fp32(uint16_t h)
-{
+/*
 
-    return 0.0;
+visualization of the conversion 
+
+ ┌───┬───────────────────┬──────────────────────────────────────────┐
+ │ S │   Exponent (E)    │               Mantissa (M)               │
+ └───┴───────────────────┴──────────────────────────────────────────┘
+ bit   bits 14 to 10           bits 9 to 0
+ 15    (5 bits total)          (10 bits total)
+
+
+
+ ┌───┬───────────────────────────────┬─────────────────────────────────────────────────────────┐
+ │ S │         Exponent (E)          │                      Mantissa (M)                       │
+ └───┴───────────────────────────────┴─────────────────────────────────────────────────────────┘
+ bit   bits 30 to 23                   bits 22 to 0
+ 31    (8 bits total)                  (23 bits total)
+
+*/
+
+
+float fp16_to_fp32(uint16_t h) {
+   
+    uint32_t w = (uint32_t)h;
+    
+    uint32_t sign     = (w & 0x8000) << 16;   // Extract sign bit   : 15 + 16 = 31 (isolates 15th bit and shifts to 31st)
+    uint32_t exponent = (w & 0x7C00) << 13;   // Extract exponent   : 10 + 13 = 23 (isolates bits 10-14 and aligns to FP32 exp slot)
+    uint32_t mantissa = (w & 0x03FF) << 13;   // Extract mantissa   : 23 - 10 = 13 (isolates bits 0-9 and shifts into 23-bit fraction slot)
+    
+   
+    exponent += 0x38000000;                   // Adjust bias diff   : (127 - 15 = 112) shifted by 23 bits -> 112 * 2^23 = 0x38000000
+    
+   
+    uint32_t fp32_bits = sign | exponent | mantissa; // Combine bits : merges sign (bit 31), exponent (bits 23-30), and mantissa (bits 0-22)
+    
+    // 4. Type-pun bit pattern to float using memcpy (UB-safe)
+    float result;
+    memcpy(&result, &fp32_bits, sizeof(float));
+    return result;
 }
 
 void print_q8_0_weights(const uint8_t *tensor_bytes_ptr, int count, int dequantize) {
@@ -341,13 +376,18 @@ void print_q8_0_weights(const uint8_t *tensor_bytes_ptr, int count, int dequanti
         int block_idx = i / 32;
         int local_idx = i % 32;
         
-        block_q8_0 block = blocks[block_idx];
-        int8_t raw_val = block.qs[local_idx];
+        // block_q8_0 block = blocks[block_idx];
+        // int8_t raw_val = block.qs[local_idx];
+
+        // lil optimization hehehe
+
+        const block_q8_0 *block = &blocks[block_idx];
+        int8_t raw_val = block->qs[local_idx];  
         
         if (dequantize) {
-            float scale = fp16_to_fp32(block.d);
+            float scale = fp16_to_fp32(block->d);
             float dequantized_val = raw_val * scale;
-            printf("Weight[%d] (Dequantized) = %f\n", i, dequantized_val);
+            printf("Weight[%d] (Dequantized) = %.8f\n", i, dequantized_val);
         } else {
             printf("Weight[%d] (Raw Q8) = %d\n", i, raw_val);
         }
@@ -378,23 +418,35 @@ void specific_tensor_data(const FileMapping *mf, const char * tensorName)
     uint64_t absolute_coordinate = raw_data_start + info.relative_offset;
     uint8_t *tensor_bytes_ptr = mf->data + absolute_coordinate;
 
+     const char * type = get_ggml_type_name(info.type);
     printf("\n--- Target Tensor Found ---\n");
     printf("Name:                           %s\n", tensorName);
-    printf("Type ID:                        %u (%s)\n", info.type, get_ggml_type_name(info.type));
+    printf("Type ID:                        %u (%s)\n", info.type, type);
     printf("Dimensions:                     %u [", info.n_dims);
 
     for(uint32_t d = 0; d < info.n_dims; d++) {
         printf("%lu%s", info.dims[d], (d == info.n_dims - 1) ? "" : " x ");
     }
 
+
     printf("]\n");
     printf("Binary Pool Begins at Offset:   %lu\n", raw_data_start);
     printf("Relative Tensor Offset:         %lu\n", info.relative_offset);
     printf("Absolute File Byte Position:    %lu\n", absolute_coordinate);
     printf("Direct Memory Pointer Address:  %p\n", (void*)tensor_bytes_ptr);
+
+
+   // branch and call 
+
+    if (type == "F32 (Float32)")
+    {
+       print_f32_weights(tensor_bytes_ptr,20);
+    }else
+    {
+        print_q8_0_weights(tensor_bytes_ptr,20,1); 
+    }
+    
 }
-
-
 
 int main(int argc, char **argv)
 {
