@@ -1,0 +1,8 @@
+venv/
+*.exe
+*.gguf
+tl.gguf
+# Ignore compiled Linux binaries/objects
+*.o
+*.so
+*.out
